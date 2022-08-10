@@ -1,0 +1,23 @@
+{
+  "name": "custom-resource",
+  "version": "1.0.0",
+  "description": "",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "@aws-amplify/cli-extensibility-helper": "^2.0.0",
+    "@aws-cdk/core": "1.163.1",
+    "@aws-cdk/aws-iam": "1.163.1",
+    "@aws-cdk/aws-stepfunctions": "1.163.1",
+    "@aws-cdk/aws-stepfunctions-tasks": "1.163.1",
+    "@aws-cdk/aws-appsync": "1.163.1",
+    "@aws-cdk/aws-sns-subscriptions": "1.163.1",
+    "@aws-cdk/aws-sns": "1.163.1"
+  },
+  "devDependencies": {
+    "typescript": "^4.2.4"
+  }
+}
