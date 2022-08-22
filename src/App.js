@@ -10,10 +10,9 @@ import {
   Alert,
   Link,
   View,
-  withAuthenticator,
 } from "@aws-amplify/ui-react";
 import { RiFeedbackLine } from "react-icons/ri";
-import { Amplify, API, graphqlOperation } from "aws-amplify";
+import { Amplify, API } from "aws-amplify";
 import { createFeedback, executeStateMachine } from "./graphql/mutations";
 import awsExports from "./aws-exports";
 Amplify.configure(awsExports);
@@ -135,4 +134,4 @@ function App() {
   );
 }
 
-export default withAuthenticator(App);
+export default App;
