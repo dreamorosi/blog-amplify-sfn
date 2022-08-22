@@ -94,7 +94,7 @@ export class cdkStack extends cdk.Stack {
 
     // TODO: email dynamic?
     customer_support_topic.addSubscription(
-      new subs.EmailSubscription("pbv+training@amazon.de")
+      new subs.EmailSubscription("email@example.com")
     );
 
     const appsyncStepFunctionsRole = new iam.Role(
