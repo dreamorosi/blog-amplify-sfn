@@ -1,10 +1,10 @@
 import * as cdk from "@aws-cdk/core";
 import * as AmplifyHelpers from "@aws-amplify/cli-extensibility-helper";
 import { AmplifyDependentResourcesAttributes } from "../../types/amplify-dependent-resources-ref";
+import * as iam from "@aws-cdk/aws-iam";
 import * as sns from "@aws-cdk/aws-sns";
 import * as subs from "@aws-cdk/aws-sns-subscriptions";
 import * as appsync from "@aws-cdk/aws-appsync";
-import * as iam from "@aws-cdk/aws-iam";
 import * as sfn from "@aws-cdk/aws-stepfunctions";
 import * as tasks from "@aws-cdk/aws-stepfunctions-tasks";
 
@@ -57,6 +57,7 @@ export class cdkStack extends cdk.Stack {
       description: "Current Amplify CLI env name",
     });
 
+    // Defines the existing GraphQL API as a dependency for the custom resource CDK stack
     const dependencies: AmplifyDependentResourcesAttributes =
       AmplifyHelpers.addResourceDependency(
         this,
@@ -65,59 +66,36 @@ export class cdkStack extends cdk.Stack {
         [
           {
             category: "api",
-            resourceName: "amplifysfn",
+            resourceName: "amplifysfn", // <- name of your API resource
           },
         ]
       );
 
+    // References the existing API using its ID
     const api = appsync.GraphqlApi.fromGraphqlApiAttributes(this, "API", {
-      graphqlApiId: cdk.Fn.ref(dependencies.api.amplifysfn.GraphQLAPIIdOutput),
+      graphqlApiId: cdk.Fn.ref(
+        dependencies.api.amplifysfn.GraphQLAPIIdOutput // <- name of your API resource
+      ),
     });
 
-    // TODO: dynamic Region
+    // Adds the AWS Step Functions service endpoint as a new HTTP data source to the GraphQL API
     const httpdatasource = api.addHttpDataSource(
       "ds",
-      "https://sync-states.eu-central-1.amazonaws.com",
+      "https://sync-states." + cdk.Stack.of(this).region + ".amazonaws.com",
       {
         name: "HTTPDataSourceWithSFN",
         authorizationConfig: {
-          signingRegion: "eu-central-1",
+          signingRegion: cdk.Stack.of(this).region,
           signingServiceName: "states",
         },
       }
     );
 
-    const customer_support_topic = new sns.Topic(
-      this,
-      "Customer support SNS topic"
-    );
-
-    // TODO: email dynamic?
-    customer_support_topic.addSubscription(
-      new subs.EmailSubscription("email@example.com")
-    );
-
-    const appsyncStepFunctionsRole = new iam.Role(
-      this,
-      "SyncStateMachineRole",
-      {
-        assumedBy: new iam.ServicePrincipal("appsync.amazonaws.com"),
-      }
-    );
-
-    // TODO: limit resources and actions
-    appsyncStepFunctionsRole.addToPolicy(
-      new iam.PolicyStatement({
-        resources: ["*"],
-        actions: ["states:StartSyncExecution", "states:StartExecution"],
-      })
-    );
-
-    // TODO: dynamic Region
-    const serviceRole = new iam.Role(this, "Role", {
-      assumedBy: new iam.ServicePrincipal("states.eu-central-1.amazonaws.com"),
-    });
-
+    /*
+    Defines the first task in our Step Functions workflow.
+    We call the Amazon Comprehend detectSentiment API with 
+    the input provided with the Step Functions execution.
+    */
     const detect_sentiment_task = new tasks.CallAwsService(
       this,
       "Detect feedback sentiment",
@@ -130,11 +108,25 @@ export class cdkStack extends cdk.Stack {
       }
     );
 
-    const sentiment_choice = new sfn.Choice(
+    // Creates an Amazon SNS topic to which we'll later publish notifications from our workflow
+    const customer_support_topic = new sns.Topic(
       this,
-      "Positive or non-positive sentiment?"
+      "Customer support SNS topic"
     );
 
+    /* Creates a subscription to the topic defined above using our own email 
+    address. Make sure to replace this with an actual email address you have 
+    access to.
+    */
+    customer_support_topic.addSubscription(
+      new subs.EmailSubscription("email@example.com") // <- replace with your email
+    );
+
+    /*
+    Defines a Step Functions task that publishs a notification 
+    containing the sentiment detected by Amazon Rekognition to 
+    the SNS topic we defined above.
+    */
     const handleNonPositiveResult = new tasks.SnsPublish(
       this,
       "Notify customer support",
@@ -147,6 +139,7 @@ export class cdkStack extends cdk.Stack {
       }
     );
 
+    // Defines a pass state that outputs that a negative sentiment was detected
     const nonPositiveResult = new sfn.Pass(
       this,
       "Non-positive feedback received",
@@ -155,31 +148,77 @@ export class cdkStack extends cdk.Stack {
       }
     );
 
+    // Defines what state the workflow moves to after the handleNonPositiveResult state
     handleNonPositiveResult.next(nonPositiveResult);
 
+    // Defines a pass state that outputs that a positive sentiment was detected
     const positiveResult = new sfn.Pass(this, "Positive feedback received", {
       result: sfn.Result.fromObject({ Sentiment: "POSITIVE" }),
     });
 
+    // Defines a Choice state
+    const sentiment_choice = new sfn.Choice(
+      this,
+      "Positive or non-positive sentiment?"
+    );
+
+    // Defines what happens if our Choice state receives a positive sentiment
     sentiment_choice.when(
       sfn.Condition.stringEquals("$.Sentiment", "POSITIVE"),
       positiveResult
     );
+
+    // Defines what happens if our Choice state receives anything other than a positive sentiment
     sentiment_choice.otherwise(handleNonPositiveResult);
 
+    // The state machine definition
     const stateMachineDefinition = detect_sentiment_task.next(sentiment_choice);
 
+    // Creates an IAM role that can be assumed by the AWS AppSync service
+    const appsyncStepFunctionsRole = new iam.Role(
+      this,
+      "SyncStateMachineRole",
+      {
+        assumedBy: new iam.ServicePrincipal("appsync.amazonaws.com"),
+      }
+    );
+
+    // Allows the role we defined above to execute express Step Functions workflows
+    appsyncStepFunctionsRole.addToPolicy(
+      new iam.PolicyStatement({
+        resources: ["*"],
+        actions: ["states:StartSyncExecution"],
+      })
+    );
+
+    // TODO: Needed because Amplify is a buggy POS
+    const serviceRole = new iam.Role(this, "Role", {
+      assumedBy: new iam.ServicePrincipal(
+        "states." + cdk.Stack.of(this).region + ".amazonaws.com"
+      ),
+    });
+
+    /* 
+    Defines the express Step Functions workflow resource using the state 
+    machine definition as well as the service role defined above.
+    */
     const stateMachine = new sfn.StateMachine(this, "SyncStateMachine", {
       definition: stateMachineDefinition,
       stateMachineType: sfn.StateMachineType.EXPRESS,
       role: serviceRole,
     });
 
+    // TODO: find out what this does
     stateMachine.grant(
       httpdatasource.grantPrincipal,
       "states:StartSyncExecution"
     );
 
+    /*
+    Adds a GraphQL resolver to our HTTP data source that defines how 
+    GraphQL requests and fetches information from our Step Functions 
+    workflow.
+    */
     httpdatasource.createResolver({
       typeName: "Mutation",
       fieldName: "executeStateMachine",
