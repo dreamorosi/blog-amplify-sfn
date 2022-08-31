@@ -67,14 +67,14 @@ export class cdkStack extends cdk.Stack {
         [
           {
             category: "api",
-            resourceName: "blogamplifysfn5", // <- name of your API resource
+            resourceName: "amplifysfn", // <- name of your API resource
           },
         ]
       );
 
     // Get the ID of the existing GraphQL API
     const apiId = cdk.Fn.ref(
-      dependencies.api.blogamplifysfn5.GraphQLAPIIdOutput // <- Adjust with name of your API resource
+      dependencies.api.amplifysfn.GraphQLAPIIdOutput // <- Adjust with name of your API resource
     );
 
     // References the existing API via its ID
