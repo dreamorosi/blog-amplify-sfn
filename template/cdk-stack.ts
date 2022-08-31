@@ -7,6 +7,7 @@ import * as subs from "@aws-cdk/aws-sns-subscriptions";
 import * as appsync from "@aws-cdk/aws-appsync";
 import * as sfn from "@aws-cdk/aws-stepfunctions";
 import * as tasks from "@aws-cdk/aws-stepfunctions-tasks";
+import * as dynamodb from "@aws-cdk/aws-dynamodb";
 
 const START_EXECUTION_REQUEST_TEMPLATE = (stateMachineArn: String) => {
   return `
@@ -66,19 +67,22 @@ export class cdkStack extends cdk.Stack {
         [
           {
             category: "api",
-            resourceName: "amplifysfn", // <- name of your API resource
+            resourceName: "blogamplifysfn5", // <- name of your API resource
           },
         ]
       );
 
-    // References the existing API using its ID
+    // Get the ID of the existing GraphQL API
+    const apiId = cdk.Fn.ref(
+      dependencies.api.blogamplifysfn5.GraphQLAPIIdOutput // <- Adjust with name of your API resource
+    );
+
+    // References the existing API via its ID
     const api = appsync.GraphqlApi.fromGraphqlApiAttributes(this, "API", {
-      graphqlApiId: cdk.Fn.ref(
-        dependencies.api.amplifysfn.GraphQLAPIIdOutput // <- name of your API resource
-      ),
+      graphqlApiId: apiId,
     });
 
-    // Adds the AWS Step Functions service endpoint as a new HTTP data source to the GraphQL API
+    // Adds the AWS Step Functions (SFN) service endpoint as a new HTTP data source to the GraphQL API
     const httpdatasource = api.addHttpDataSource(
       "ds",
       "https://sync-states." + cdk.Stack.of(this).region + ".amazonaws.com",
@@ -92,9 +96,9 @@ export class cdkStack extends cdk.Stack {
     );
 
     /*
-    Defines the first task in our Step Functions workflow.
-    We call the Amazon Comprehend detectSentiment API with 
-    the input provided with the Step Functions execution.
+    Defines the first task in our SFN workflow. We call the 
+    Amazon Comprehend detectSentiment API with the input 
+    provided with the SFN execution.
     */
     const detect_sentiment_task = new tasks.CallAwsService(
       this,
@@ -105,6 +109,45 @@ export class cdkStack extends cdk.Stack {
         iamResources: ["*"],
         iamAction: "comprehend:DetectSentiment",
         parameters: { "Text.$": "$.input", LanguageCode: "en" },
+        resultPath: "$.DetectSentiment",
+      }
+    );
+
+    // Get the name of the current Amplify environment (e.g., "dev", "prod")
+    const envName = AmplifyHelpers.getProjectInfo().envName;
+
+    // Import the DynamoDB table created by Amplify as a result of the @model directive in our GraphQL schema
+    const feedbackTable = dynamodb.Table.fromTableName(
+      this,
+      "FeedbackTable",
+      "Feedback-" + apiId + "-" + envName
+    );
+
+    // Save feedback and detected sentiment to DynamoDB table
+    const save_to_ddb = new tasks.DynamoPutItem(
+      this,
+      "Record feedback and sentiment",
+      {
+        item: {
+          id: tasks.DynamoAttributeValue.fromString(
+            sfn.JsonPath.stringAt("$$.Execution.Id")
+          ),
+          __typename: tasks.DynamoAttributeValue.fromString("Feedback"),
+          createdAt: tasks.DynamoAttributeValue.fromString(
+            sfn.JsonPath.stringAt("$$.State.EnteredTime")
+          ),
+          updatedAt: tasks.DynamoAttributeValue.fromString(
+            sfn.JsonPath.stringAt("$$.State.EnteredTime")
+          ),
+          content: tasks.DynamoAttributeValue.fromString(
+            sfn.JsonPath.stringAt("$.input")
+          ),
+          sentiment: tasks.DynamoAttributeValue.fromString(
+            sfn.JsonPath.stringAt("$.DetectSentiment.Sentiment")
+          ),
+        },
+        table: feedbackTable,
+        resultPath: sfn.JsonPath.DISCARD,
       }
     );
 
@@ -123,7 +166,7 @@ export class cdkStack extends cdk.Stack {
     );
 
     /*
-    Defines a Step Functions task that publishs a notification 
+    Defines a SFN task that publishs a notification 
     containing the sentiment detected by Amazon Rekognition to 
     the SNS topic we defined above.
     */
@@ -133,8 +176,10 @@ export class cdkStack extends cdk.Stack {
       {
         topic: customer_support_topic,
         message: sfn.TaskInput.fromObject({
-          Message: "Negative feedback detected.",
-          "Detected sentiment": sfn.JsonPath.stringAt("$.Sentiment"),
+          Message: "Non-positive feedback detected.",
+          "Detected sentiment": sfn.JsonPath.stringAt(
+            "$.DetectSentiment.Sentiment"
+          ),
         }),
       }
     );
@@ -144,7 +189,7 @@ export class cdkStack extends cdk.Stack {
       this,
       "Non-positive feedback received",
       {
-        result: sfn.Result.fromObject({ Sentiment: "NEGATIVE" }),
+        result: sfn.Result.fromObject({ Sentiment: "NON-POSITIVE" }),
       }
     );
 
@@ -164,7 +209,7 @@ export class cdkStack extends cdk.Stack {
 
     // Defines what happens if our Choice state receives a positive sentiment
     sentiment_choice.when(
-      sfn.Condition.stringEquals("$.Sentiment", "POSITIVE"),
+      sfn.Condition.stringEquals("$.DetectSentiment.Sentiment", "POSITIVE"),
       positiveResult
     );
 
@@ -172,7 +217,9 @@ export class cdkStack extends cdk.Stack {
     sentiment_choice.otherwise(handleNonPositiveResult);
 
     // The state machine definition
-    const stateMachineDefinition = detect_sentiment_task.next(sentiment_choice);
+    const stateMachineDefinition = detect_sentiment_task
+      .next(save_to_ddb)
+      .next(sentiment_choice);
 
     // Creates an IAM role that can be assumed by the AWS AppSync service
     const appsyncStepFunctionsRole = new iam.Role(
@@ -183,7 +230,7 @@ export class cdkStack extends cdk.Stack {
       }
     );
 
-    // Allows the role we defined above to execute express Step Functions workflows
+    // Allows the role we defined above to execute express SFN workflows
     appsyncStepFunctionsRole.addToPolicy(
       new iam.PolicyStatement({
         resources: ["*"],
@@ -191,7 +238,7 @@ export class cdkStack extends cdk.Stack {
       })
     );
 
-    // TODO: Needed because Amplify is a buggy POS
+    // Create a service role for SFN to use
     const serviceRole = new iam.Role(this, "Role", {
       assumedBy: new iam.ServicePrincipal(
         "states." + cdk.Stack.of(this).region + ".amazonaws.com"
@@ -199,7 +246,7 @@ export class cdkStack extends cdk.Stack {
     });
 
     /* 
-    Defines the express Step Functions workflow resource using the state 
+    Defines the express SFN workflow resource using the state 
     machine definition as well as the service role defined above.
     */
     const stateMachine = new sfn.StateMachine(this, "SyncStateMachine", {
@@ -216,8 +263,7 @@ export class cdkStack extends cdk.Stack {
 
     /*
     Adds a GraphQL resolver to our HTTP data source that defines how 
-    GraphQL requests and fetches information from our Step Functions 
-    workflow.
+    GraphQL requests and fetches information from our SFN workflow.
     */
     httpdatasource.createResolver({
       typeName: "Mutation",

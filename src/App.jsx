@@ -12,7 +12,7 @@ import {
 } from "@aws-amplify/ui-react";
 import { RiFeedbackLine } from "react-icons/ri";
 import { Amplify, API } from "aws-amplify";
-import { createFeedback, executeStateMachine } from "./graphql/mutations";
+import { executeStateMachine } from "./graphql/mutations";
 import awsExports from "./aws-exports";
 Amplify.configure(awsExports);
 
@@ -25,32 +25,15 @@ function App() {
 
     console.log("Feedback: ", feedback);
 
-    const submission = { content: feedback };
-
-    const res_create = await API.graphql({
-      query: createFeedback,
-      variables: { input: submission },
-      authMode: "API_KEY",
-    });
-
-    console.log(res_create.data.createFeedback.id);
-
-    submission.id = res_create.data.createFeedback.id;
-
     const res_sfn = await API.graphql({
       query: executeStateMachine,
       variables: { input: feedback },
       authMode: "API_KEY",
     });
 
-    console.log("res_create: " + res_create);
-    console.log("res_sefn: " + res_sfn);
-
     const output = JSON.parse(res_sfn.data.executeStateMachine.output);
-    console.log(output);
 
     setFeedbackState(output.Sentiment);
-    console.log("feedbackState: " + feedbackState);
 
     setFeedback("");
   }
