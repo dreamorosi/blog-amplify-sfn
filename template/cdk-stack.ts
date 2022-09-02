@@ -221,23 +221,6 @@ export class cdkStack extends cdk.Stack {
       .next(save_to_ddb)
       .next(sentiment_choice);
 
-    // Creates an IAM role that can be assumed by the AWS AppSync service
-    const appsyncStepFunctionsRole = new iam.Role(
-      this,
-      "SyncStateMachineRole",
-      {
-        assumedBy: new iam.ServicePrincipal("appsync.amazonaws.com"),
-      }
-    );
-
-    // Allows the role we defined above to execute express SFN workflows
-    appsyncStepFunctionsRole.addToPolicy(
-      new iam.PolicyStatement({
-        resources: ["*"],
-        actions: ["states:StartSyncExecution"],
-      })
-    );
-
     // Create a service role for SFN to use
     const serviceRole = new iam.Role(this, "Role", {
       assumedBy: new iam.ServicePrincipal(
@@ -259,6 +242,23 @@ export class cdkStack extends cdk.Stack {
     stateMachine.grant(
       httpdatasource.grantPrincipal,
       "states:StartSyncExecution"
+    );
+
+    // Creates an IAM role that can be assumed by the AWS AppSync service
+    const appsyncStepFunctionsRole = new iam.Role(
+      this,
+      "SyncStateMachineRole",
+      {
+        assumedBy: new iam.ServicePrincipal("appsync.amazonaws.com"),
+      }
+    );
+
+    // Allows the role we defined above to execute express SFN workflows
+    appsyncStepFunctionsRole.addToPolicy(
+      new iam.PolicyStatement({
+        resources: [stateMachine.stateMachineArn],
+        actions: ["states:StartSyncExecution"],
+      })
     );
 
     /*
