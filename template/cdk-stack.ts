@@ -255,7 +255,7 @@ export class cdkStack extends cdk.Stack {
       role: serviceRole,
     });
 
-    // TODO: find out what this does
+    // Grant AppSync HTTP data source rights to execute the SFN workflow
     stateMachine.grant(
       httpdatasource.grantPrincipal,
       "states:StartSyncExecution"
