@@ -100,7 +100,7 @@ function App() {
                   We are always looking to improve. If you felt your experience
                   was not optimal, we would love to make things right. Follow{" "}
                   <Link
-                    href="https://ui.docs.amplify.aws/react/components/link"
+                    href="https://docs.amplify.aws/"
                     textDecoration="underline dotted"
                     isExternal={true}
                   >
